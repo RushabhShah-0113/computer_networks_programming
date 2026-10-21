@@ -1,0 +1,23 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+.env
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated experiment results
+Results/csv/*.csv
+Results/graphs/*.png
+Results/graphs/*.pdf
+
+# Downloaded test files
+downloads/
+test_output/
