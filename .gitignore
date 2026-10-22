@@ -21,3 +21,11 @@ Results/graphs/*.pdf
 # Downloaded test files
 downloads/
 test_output/
+
+# Test datasets
+Test_case/
+Test_case.zip
+
+# Generated experiment downloads
+experiment_downloads/
+
