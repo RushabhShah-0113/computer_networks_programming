@@ -1,17 +1,23 @@
 
-"""Client for the single-threaded TCP topic-based file distribution service."""
-
 import argparse
 import os
-import sys
 import socket
 
-from metrics import TransferMetrics, append_csv
-from protocol import CHUNK_SIZE, recv_exact, recv_message, send_message
+from protocol import (
+    GET,
+    FILE_INFO,
+    FILE_DATA,
+    TRANSFER_COMPLETE,
+    ERROR,
+    send_frame,
+    recv_frame,
+    encode_json,
+    decode_json,
+    decode_file_data,
+)
 
 
 def safe_filename(name):
-    """Ensure the server-provided filename cannot escape the output directory."""
     return (
         isinstance(name, str)
         and name not in ("", ".", "..")
@@ -21,159 +27,171 @@ def safe_filename(name):
     )
 
 
-def download_topic(server_ip, server_port, topic, output_dir):
-    """Request a topic and download all its files."""
-    metrics = TransferMetrics()
-    total_files = 0
+def receive_topic(server_ip, server_port, topic, output_dir, timeout=300):
+    topic_dir = os.path.join(output_dir, topic)
+    os.makedirs(topic_dir, exist_ok=True)
+
+    files_received = 0
+    total_bytes_received = 0
 
     with socket.create_connection(
-        (server_ip, server_port), timeout=30
+        (server_ip, server_port), timeout=timeout
     ) as sock:
-        sock.settimeout(300)
+        sock.settimeout(timeout)
 
-        # Request all files belonging to the selected topic.
-        send_message(sock, {
-            "type": "GET",
-            "topic": topic,
-        })
+        send_frame(
+            sock,
+            GET,
+            encode_json({"topic": topic}),
+        )
 
-        response = recv_message(sock)
+        while True:
+            message_type, payload = recv_frame(sock)
 
-        if response.get("type") == "ERROR":
-            raise RuntimeError(
-                response.get("message", "The server rejected the request")
-            )
+            if message_type == ERROR:
+                error = decode_json(payload)
+                raise RuntimeError(
+                    error.get("message", "Server reported an error")
+                )
 
-        if response.get("type") != "TOPIC":
-            raise RuntimeError("Unexpected response from server")
+            if message_type == FILE_INFO:
+                info = decode_json(payload)
+                filename = info.get("name")
+                expected_size = info.get("size")
 
-        if response.get("topic") != topic:
-            raise RuntimeError("The server returned an unexpected topic")
+                if not safe_filename(filename):
+                    raise ValueError("Invalid filename in FILE_INFO")
 
-        files = response.get("files")
+                if (
+                    not isinstance(expected_size, int)
+                    or isinstance(expected_size, bool)
+                    or expected_size < 0
+                ):
+                    raise ValueError("Invalid file size in FILE_INFO")
 
-        if not isinstance(files, list):
-            raise RuntimeError("Invalid file manifest received")
+                final_path = os.path.join(topic_dir, filename)
+                partial_path = final_path + ".part"
+                received_for_file = 0
 
-        topic_output = os.path.join(output_dir, topic)
-        os.makedirs(topic_output, exist_ok=True)
+                try:
+                    with open(partial_path, "wb") as file:
+                        while received_for_file < expected_size:
+                            data_type, data_payload = recv_frame(sock)
 
-        seen_names = set()
+                            if data_type == ERROR:
+                                error = decode_json(data_payload)
+                                raise RuntimeError(
+                                    error.get("message", "Transfer error")
+                                )
 
-        for item in files:
-            if not isinstance(item, dict):
-                raise RuntimeError("Invalid file entry in manifest")
+                            if data_type != FILE_DATA:
+                                raise ValueError(
+                                    "Expected FILE_DATA frame"
+                                )
 
-            name = item.get("name")
-            size = item.get("size")
+                            data_filename, chunk = decode_file_data(
+                                data_payload
+                            )
 
-            if not safe_filename(name):
-                raise RuntimeError(f"Unsafe filename: {name!r}")
+                            if data_filename != filename:
+                                raise ValueError(
+                                    "FILE_DATA filename mismatch"
+                                )
 
-            if name in seen_names:
-                raise RuntimeError(f"Duplicate filename: {name}")
+                            if not chunk:
+                                raise ValueError(
+                                    "Empty FILE_DATA chunk before file end"
+                                )
 
-            if type(size) is not int or size < 0:
-                raise RuntimeError(f"Invalid file size for {name}")
+                            if (
+                                received_for_file + len(chunk)
+                                > expected_size
+                            ):
+                                raise ValueError(
+                                    "Received more bytes than FILE_INFO declared"
+                                )
 
-            seen_names.add(name)
-            destination = os.path.join(topic_output, name)
-            temporary_path = destination + ".part"
-            remaining = size
+                            file.write(chunk)
+                            received_for_file += len(chunk)
+                            total_bytes_received += len(chunk)
 
-            print(f"[DOWNLOADING] {name} ({size:,} bytes)")
+                    if received_for_file != expected_size:
+                        raise ValueError(
+                            f"Incomplete file: {filename}"
+                        )
 
-            try:
-                # Stream the file to disk without loading it all into memory.
-                with open(temporary_path, "wb") as target:
-                    while remaining > 0:
-                        chunk_size = min(CHUNK_SIZE, remaining)
-                        chunk = recv_exact(sock, chunk_size)
+                    os.replace(partial_path, final_path)
+                    files_received += 1
 
-                        target.write(chunk)
-                        metrics.add_bytes(len(chunk))
-                        remaining -= len(chunk)
+                    print(
+                        f"[RECEIVED] {filename}: "
+                        f"{received_for_file} bytes"
+                    )
 
-                # Rename only after the entire file has been received.
-                os.replace(temporary_path, destination)
+                except Exception:
+                    try:
+                        if os.path.exists(partial_path):
+                            os.remove(partial_path)
+                    except OSError:
+                        pass
+                    raise
 
-            except Exception:
-                if os.path.exists(temporary_path):
-                    os.remove(temporary_path)
-                raise
+            elif message_type == TRANSFER_COMPLETE:
+                result = decode_json(payload)
 
-            total_files += 1
-            print(f"[SAVED] {destination}")
+                if result.get("topic") != topic:
+                    raise ValueError("Completed topic does not match request")
 
-        # Confirm the complete topic transfer.
-        completion = recv_message(sock)
+                if result.get("files_sent") != files_received:
+                    raise ValueError("File count verification failed")
 
-        if completion.get("type") != "TRANSFER_COMPLETE":
-            raise RuntimeError("Server did not confirm transfer completion")
+                if result.get("total_bytes") != total_bytes_received:
+                    raise ValueError("Total byte count verification failed")
 
-        if completion.get("files") != total_files:
-            raise RuntimeError("File count does not match server confirmation")
+                print(f"[SUCCESS] Topic '{topic}' downloaded.")
+                print(f"Files received: {files_received}")
+                print(f"Useful bytes: {total_bytes_received}")
 
-        if completion.get("payload_bytes") != metrics.payload_bytes:
-            raise RuntimeError("Payload byte count does not match")
+                return {
+                    "files_received": files_received,
+                    "useful_bytes": total_bytes_received,
+                }
 
-    summary = metrics.summary()
-    summary.update({
-        "topic": topic,
-        "server_ip": server_ip,
-        "server_port": server_port,
-        "files_downloaded": total_files,
-        "status": "success",
-    })
-
-    # Save metrics in the repository's Results directory.
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..")
-    )
-    csv_path = os.path.join(
-        repo_root, "Results", "csv", "part1_single_threaded.csv"
-    )
-
-    append_csv(csv_path, summary)
-
-    print("\n========== TRANSFER SUMMARY ==========")
-    print(f"Topic: {topic}")
-    print(f"Files downloaded: {total_files}")
-    print(f"Payload received: {metrics.payload_bytes:,} bytes")
-    print(f"Elapsed time: {summary['elapsed_seconds']} seconds")
-    print(f"Throughput: {summary['throughput_mbps']} Mbps")
-    print(f"Metrics saved to: {csv_path}")
+            else:
+                raise ValueError(
+                    f"Unexpected frame type: {message_type}"
+                )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download all files belonging to a topic"
+        description="Topic file transfer client"
     )
-    parser.add_argument("server_ip", help="Server IP address")
-    parser.add_argument("server_port", type=int, help="Server TCP port")
-    parser.add_argument("topic", help="Topic to download, e.g. cane")
-    parser.add_argument("output_dir", help="Directory to store downloaded files")
-
+    parser.add_argument("server_ip")
+    parser.add_argument("server_port", type=int)
+    parser.add_argument("topic")
+    parser.add_argument("output_dir")
+    parser.add_argument("--timeout", type=float, default=300.0)
     args = parser.parse_args()
 
     if not 1 <= args.server_port <= 65535:
-        parser.error("Server port must be between 1 and 65535")
+        parser.error("Port must be between 1 and 65535")
 
-    try:
-        download_topic(
-            args.server_ip,
-            args.server_port,
-            args.topic,
-            args.output_dir,
-        )
-    except (
-        OSError,
-        ConnectionError,
-        RuntimeError,
-        ValueError,
-    ) as exc:
-        print(f"[ERROR] {exc}", file=sys.stderr)
-        sys.exit(1)
+    if not safe_filename(args.topic):
+        parser.error("Invalid topic name")
+
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+
+    result = receive_topic(
+        args.server_ip,
+        args.server_port,
+        args.topic,
+        os.path.abspath(args.output_dir),
+        args.timeout,
+    )
+
+    print(f"Transfer result: {result}")
 
 
 if __name__ == "__main__":

@@ -1,26 +1,39 @@
 
-"""Single-threaded TCP topic-based file distribution server."""
-
 import argparse
 import os
 import socket
 
-from protocol import CHUNK_SIZE, recv_message, send_message
+from protocol import (
+    GET,
+    FILE_INFO,
+    FILE_DATA,
+    TRANSFER_COMPLETE,
+    ERROR,
+    CHUNK_SIZE,
+    send_frame,
+    recv_frame,
+    encode_json,
+    decode_json,
+    encode_file_data,
+)
 
 
 def get_topic_files(root_dir, topic):
-    """Return safe, regular files directly inside the requested topic."""
-    if not topic or topic in {".", ".."}:
+    """List regular files directly inside a valid topic directory."""
+    if (
+        not isinstance(topic, str)
+        or not topic
+        or topic in (".", "..")
+        or os.path.basename(topic) != topic
+        or "/" in topic
+        or "\\" in topic
+    ):
         raise ValueError("Invalid topic name")
 
-    # Topics are directory names directly beneath root_dir.
-    if os.path.basename(topic) != topic or "/" in topic or "\\" in topic:
-        raise ValueError("Invalid topic name")
+    root_real = os.path.realpath(root_dir)
+    topic_dir = os.path.realpath(os.path.join(root_real, topic))
 
-    root = os.path.realpath(root_dir)
-    topic_dir = os.path.realpath(os.path.join(root, topic))
-
-    if os.path.commonpath([root, topic_dir]) != root:
+    if os.path.commonpath([root_real, topic_dir]) != root_real:
         raise ValueError("Invalid topic path")
 
     if not os.path.isdir(topic_dir):
@@ -31,130 +44,152 @@ def get_topic_files(root_dir, topic):
     for name in sorted(os.listdir(topic_dir)):
         path = os.path.join(topic_dir, name)
 
-        # Transfer regular files only; do not follow symbolic links.
         if os.path.islink(path) or not os.path.isfile(path):
             continue
 
         files.append({
             "name": name,
-            "path": path,
             "size": os.path.getsize(path),
+            "path": path,
         })
 
-    return files
+    return topic_dir, files
 
 
 def handle_client(conn, address, root_dir):
-    """Serve one client from request through completion."""
     print(f"[CONNECTED] {address}")
 
-    with conn:
+    try:
+        message_type, payload = recv_frame(conn)
+
+        if message_type != GET:
+            send_frame(
+                conn,
+                ERROR,
+                encode_json({"message": "Expected GET request"}),
+            )
+            return
+
+        request = decode_json(payload)
+        topic = request.get("topic")
+
         try:
-            request = recv_message(conn)
+            topic_dir, files = get_topic_files(root_dir, topic)
+        except (ValueError, FileNotFoundError) as exc:
+            send_frame(
+                conn,
+                ERROR,
+                encode_json({"message": str(exc)}),
+            )
+            return
 
-            if request.get("type") != "GET":
-                send_message(conn, {
-                    "type": "ERROR",
-                    "message": "Expected a GET request",
-                })
-                return
+        total_bytes = sum(item["size"] for item in files)
+        files_sent = 0
+        bytes_sent = 0
 
-            topic = request.get("topic")
+        for item in files:
+            name = item["name"]
+            size = item["size"]
+            path = item["path"]
 
-            if not isinstance(topic, str):
-                send_message(conn, {
-                    "type": "ERROR",
-                    "message": "Topic must be a string",
-                })
-                return
-
-            try:
-                files = get_topic_files(root_dir, topic)
-            except (ValueError, FileNotFoundError, OSError) as exc:
-                send_message(conn, {
-                    "type": "ERROR",
-                    "message": str(exc),
-                })
-                return
-
-            manifest = [
-                {"name": item["name"], "size": item["size"]}
-                for item in files
-            ]
-
-            send_message(conn, {
-                "type": "TOPIC",
-                "topic": topic,
-                "files": manifest,
-            })
-
-            total_sent = 0
-
-            for item in files:
-                print(
-                    f"[SENDING] {topic}/{item['name']} "
-                    f"({item['size']} bytes) to {address}"
-                )
-
-                remaining = item["size"]
-
-                with open(item["path"], "rb") as source:
-                    while remaining > 0:
-                        chunk = source.read(min(CHUNK_SIZE, remaining))
-
-                        if not chunk:
-                            raise OSError(
-                                f"File changed or shortened during transfer: "
-                                f"{item['name']}"
-                            )
-
-                        conn.sendall(chunk)
-                        remaining -= len(chunk)
-                        total_sent += len(chunk)
-
-            send_message(conn, {
-                "type": "TRANSFER_COMPLETE",
-                "files": len(files),
-                "payload_bytes": total_sent,
-            })
-
-            print(
-                f"[COMPLETE] {address}: {len(files)} files, "
-                f"{total_sent} payload bytes"
+            # Announce the file and its total size.
+            send_frame(
+                conn,
+                FILE_INFO,
+                encode_json({
+                    "name": name,
+                    "size": size,
+                }),
             )
 
-        except (ConnectionError, OSError, ValueError) as exc:
-            print(f"[TRANSFER ERROR] {address}: {exc}")
+            sent_for_file = 0
+
+            with open(path, "rb") as file:
+                while True:
+                    chunk = file.read(CHUNK_SIZE)
+
+                    if not chunk:
+                        break
+
+                    file_payload = encode_file_data(name, chunk)
+                    send_frame(conn, FILE_DATA, file_payload)
+
+                    sent_for_file += len(chunk)
+                    bytes_sent += len(chunk)
+
+            if sent_for_file != size:
+                raise OSError(
+                    f"File changed during transfer: {name}"
+                )
+
+            files_sent += 1
+            print(f"[SENT] {name}: {sent_for_file} bytes")
+
+        send_frame(
+            conn,
+            TRANSFER_COMPLETE,
+            encode_json({
+                "topic": topic,
+                "files_sent": files_sent,
+                "total_bytes": total_bytes,
+            }),
+        )
+
+        print(
+            f"[COMPLETE] {address}: topic={topic}, "
+            f"files={files_sent}, bytes={bytes_sent}"
+        )
+
+    except (ConnectionError, OSError, ValueError) as exc:
+        print(f"[TRANSFER ERROR] {address}: {exc}")
+
+        # Best-effort error frame; the peer may already have disconnected.
+        try:
+            send_frame(
+                conn,
+                ERROR,
+                encode_json({"message": str(exc)}),
+            )
+        except OSError:
+            pass
+
+    finally:
+        conn.close()
+        print(f"[DISCONNECTED] {address}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Single-threaded TCP file distribution server"
+        description="Single-threaded topic file server"
     )
     parser.add_argument("port", type=int)
     parser.add_argument("topics_root_dir")
     args = parser.parse_args()
 
     if not 1 <= args.port <= 65535:
-        parser.error("port must be between 1 and 65535")
+        parser.error("Port must be between 1 and 65535")
 
-    root_dir = os.path.realpath(args.topics_root_dir)
+    root_dir = os.path.abspath(args.topics_root_dir)
 
     if not os.path.isdir(root_dir):
         parser.error(f"Topics directory does not exist: {root_dir}")
 
-    # One listening socket; clients are served sequentially.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("0.0.0.0", args.port))
-        server.listen()
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("0.0.0.0", args.port))
+    server.listen()
 
-        print(f"[LISTENING] Port {args.port}")
-        print(f"[TOPICS ROOT] {root_dir}")
+    print(f"[LISTENING] 0.0.0.0:{args.port}")
+    print(f"[TOPICS DIR] {root_dir}")
 
+    try:
         while True:
             conn, address = server.accept()
             handle_client(conn, address, root_dir)
+    except KeyboardInterrupt:
+        print("\n[SHUTDOWN] Server stopping")
+    finally:
+        server.close()
 
 
 if __name__ == "__main__":
