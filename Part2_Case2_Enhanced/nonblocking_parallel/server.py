@@ -448,12 +448,16 @@ class NonBlockingServer:
 
         if assignment is None:
             if self.scheduler.topic_completed(state["topic"]):
-                self.queue_json(
-                    state,
-                    TRANSFER_COMPLETE,
-                    {"topic": state["topic"]},
-                )
-                state["finish_after_write"] = True
+                for other_fd, other_state in list(self.connections.items()):
+                    if other_state.get("topic") == state["topic"] and not other_state.get("finish_after_write"):
+                        self.queue_json(
+                            other_state,
+                            TRANSFER_COMPLETE,
+                            {"topic": state["topic"]},
+                        )
+                        other_state["finish_after_write"] = True
+                        if other_state.get("socket"):
+                            self.write_sockets.add(other_state["socket"])
             return
 
         filename = assignment["filename"]

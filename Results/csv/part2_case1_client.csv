@@ -1,0 +1,7 @@
+implementation,topic,completion_time_seconds,total_bytes_transmitted,useful_bytes,redundant_bytes,throughput_mbps,raw_payload_throughput_mbps,checkpoint_overhead_bytes,failure_count,reconnect_count,status,files_received,attempts_used
+case1_restart,demo_topic,0.513739,3670016,3145728,524288,48.985593,57.149859,0,1,1,success,2,2
+case1_restart,topic_fault,0.017228,16777216,16777216,0,7790.711804,7790.711804,0,0,0,success,4,1
+case1_restart,topic_fault,0.009973,16777216,16777216,0,13458.671136,13458.671136,0,0,0,success,4,1
+case1_restart,topic_fault,0.524552,18546688,16777216,1769472,255.871179,282.857593,0,1,1,success,4,2
+case1_restart,topic_fault,1.044231,35454976,16777216,18677760,128.532623,271.625582,0,2,2,success,4,3
+case1_restart,topic_fault,0.523149,17170432,16777216,393216,256.55722,262.57028,0,1,1,success,4,2

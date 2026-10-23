@@ -5,7 +5,19 @@ import os
 import socket
 import threading
 
-from protocol import CHUNK_SIZE, recv_message, send_message
+from protocol import (
+    GET,
+    FILE_INFO,
+    FILE_DATA,
+    TRANSFER_COMPLETE,
+    ERROR,
+    CHUNK_SIZE,
+    send_frame,
+    recv_frame,
+    encode_json,
+    decode_json,
+    encode_file_data,
+)
 
 
 def get_topic_files(root_dir, topic):
@@ -45,73 +57,105 @@ def get_topic_files(root_dir, topic):
 
 def handle_client(conn, address, root_dir):
     """Handle one client independently in its own thread."""
-    print(f"[CONNECTED] {address} | Thread: {threading.current_thread().name}")
+    thread_name = threading.current_thread().name
+    print(f"[{thread_name}] [CONNECTED] Client {address}")
 
     with conn:
         try:
-            request = recv_message(conn)
+            message_type, payload = recv_frame(conn)
 
-            if not isinstance(request, dict) or request.get("type") != "GET":
-                send_message(conn, {
-                    "type": "ERROR",
-                    "message": "Expected a GET request",
-                })
+            if message_type != GET:
+                send_frame(
+                    conn,
+                    ERROR,
+                    encode_json({"message": "Expected GET request"}),
+                )
                 return
 
+            request = decode_json(payload)
             topic = request.get("topic")
 
             try:
                 files = get_topic_files(root_dir, topic)
             except (ValueError, FileNotFoundError, OSError) as exc:
-                send_message(conn, {
-                    "type": "ERROR",
-                    "message": str(exc),
-                })
+                send_frame(
+                    conn,
+                    ERROR,
+                    encode_json({"message": str(exc)}),
+                )
                 return
 
-            manifest = [
-                {"name": item["name"], "size": item["size"]}
-                for item in files
-            ]
-
-            send_message(conn, {
-                "type": "TOPIC",
-                "topic": topic,
-                "files": manifest,
-            })
-
-            total_sent = 0
+            total_bytes = sum(item["size"] for item in files)
+            files_sent = 0
+            bytes_sent = 0
 
             for item in files:
-                remaining = item["size"]
+                name = item["name"]
+                size = item["size"]
+                path = item["path"]
 
-                with open(item["path"], "rb") as source:
-                    while remaining > 0:
-                        chunk = source.read(min(CHUNK_SIZE, remaining))
+                # Announce the file and its total size.
+                send_frame(
+                    conn,
+                    FILE_INFO,
+                    encode_json({
+                        "name": name,
+                        "size": size,
+                    }),
+                )
 
+                sent_for_file = 0
+
+                with open(path, "rb") as file:
+                    while True:
+                        chunk = file.read(CHUNK_SIZE)
                         if not chunk:
-                            raise OSError(
-                                f"File changed or shortened during transfer: "
-                                f"{item['name']}"
-                            )
+                            break
 
-                        conn.sendall(chunk)
-                        remaining -= len(chunk)
-                        total_sent += len(chunk)
+                        file_payload = encode_file_data(name, chunk)
+                        send_frame(conn, FILE_DATA, file_payload)
 
-            send_message(conn, {
-                "type": "TRANSFER_COMPLETE",
-                "files": len(files),
-                "payload_bytes": total_sent,
-            })
+                        sent_for_file += len(chunk)
+                        bytes_sent += len(chunk)
+
+                if sent_for_file != size:
+                    raise OSError(
+                        f"File changed during transfer: {name}"
+                    )
+
+                files_sent += 1
+                print(
+                    f"[{thread_name}] [SENT] {name} ({sent_for_file} bytes) -> {address}"
+                )
+
+            send_frame(
+                conn,
+                TRANSFER_COMPLETE,
+                encode_json({
+                    "topic": topic,
+                    "files_sent": files_sent,
+                    "total_bytes": total_bytes,
+                }),
+            )
 
             print(
-                f"[COMPLETE] {address}: {len(files)} files, "
-                f"{total_sent} payload bytes"
+                f"[{thread_name}] [COMPLETE] Finished topic '{topic}' for {address}: "
+                f"{files_sent} files, {bytes_sent} bytes transferred."
             )
 
         except (ConnectionError, OSError, ValueError) as exc:
-            print(f"[TRANSFER ERROR] {address}: {exc}")
+            print(f"[{thread_name}] [TRANSFER ERROR] {address}: {exc}")
+            try:
+                send_frame(
+                    conn,
+                    ERROR,
+                    encode_json({"message": str(exc)}),
+                )
+            except OSError:
+                pass
+
+        finally:
+            print(f"[{thread_name}] [DISCONNECTED] {address}")
 
 
 def main():
@@ -132,23 +176,27 @@ def main():
 
     # Track worker threads so they can be joined during shutdown.
     threads = []
+    worker_counter = 0
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("0.0.0.0", args.port))
-        server.listen()
+        server.listen(128)
 
-        print(f"[LISTENING] Multi-threaded server on port {args.port}")
-        print(f"[TOPICS ROOT] {root_dir}")
+        print(f"===============================================================")
+        print(f" [MULTI-THREADED SERVER] Listening on 0.0.0.0:{args.port}")
+        print(f" [TOPICS ROOT] {root_dir}")
+        print(f"===============================================================")
 
         try:
             while True:
                 conn, address = server.accept()
+                worker_counter += 1
 
                 worker = threading.Thread(
                     target=handle_client,
                     args=(conn, address, root_dir),
-                    name=f"Client-{address[0]}-{address[1]}",
+                    name=f"Worker-{worker_counter}",
                     daemon=True,
                 )
                 worker.start()

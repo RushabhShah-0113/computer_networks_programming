@@ -199,6 +199,7 @@ def receive_file(
     state,
     metrics,
     expected_info=None,
+    checkpoint_interval=CHECKPOINT_INTERVAL,
 ):
     info = expected_info or receive_json(sock, FILE_INFO)
 
@@ -291,7 +292,7 @@ def receive_file(
             metrics.update_file_progress(filename, current_offset)
 
             should_checkpoint = (
-                received_since_checkpoint >= CHECKPOINT_INTERVAL
+                received_since_checkpoint >= checkpoint_interval
                 or current_offset == file_size
             )
 
@@ -347,8 +348,15 @@ def checkpoint_file_path(output_dir, topic):
     return output_dir / f".{topic}.checkpoint.json"
 
 
-def run_client(server_ip, server_port, topic, output_dir, metrics_csv):
-    output_path = Path(output_dir).resolve()
+def run_client(
+    server_ip,
+    server_port,
+    topic,
+    output_dir,
+    metrics_csv,
+    checkpoint_interval=CHECKPOINT_INTERVAL,
+):
+    output_path = (Path(output_dir).resolve() / topic)
     output_path.mkdir(parents=True, exist_ok=True)
 
     checkpoint_path = checkpoint_file_path(output_path, topic)
@@ -425,6 +433,7 @@ def run_client(server_ip, server_port, topic, output_dir, metrics_csv):
                         state,
                         metrics,
                         expected_info=info,
+                        checkpoint_interval=checkpoint_interval,
                     )
                     continue
 
@@ -479,6 +488,12 @@ def main():
         default="client_metrics.csv",
         help="CSV path for client transfer metrics",
     )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=CHECKPOINT_INTERVAL,
+        help="Byte interval between checkpoints",
+    )
 
     args = parser.parse_args()
 
@@ -488,6 +503,7 @@ def main():
         args.topic,
         args.output_dir,
         args.metrics,
+        checkpoint_interval=args.checkpoint_interval,
     )
 
 

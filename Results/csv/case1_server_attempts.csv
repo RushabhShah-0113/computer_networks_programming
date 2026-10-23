@@ -1,0 +1,16 @@
+attempt_id,topic,client,payload_bytes_sent,failure_injected,status,elapsed_seconds
+ec7b41b7cf6f4a68b89b396c0e7f1914,demo_topic,"('127.0.0.1', 52122)",917504,1,injected_failure,0.000747
+a735757990be4a0081b0c85dc6b5e9e7,demo_topic,"('127.0.0.1', 52123)",720896,1,injected_failure,0.002067
+e73c9657ef964bff9ec064e7681d8ceb,demo_topic,"('127.0.0.1', 52124)",2949120,1,injected_failure,0.003534
+397de80fe6d14dc99b7ea921edd04dd5,demo_topic,"('127.0.0.1', 52125)",3145728,0,success,0.004822
+b2e3b85e5de04c149b7dfd956d77e6ae,demo_topic,"('127.0.0.1', 52133)",524288,1,injected_failure,0.000526
+7a198a8ad8994f6c9d5445dfe16fc4fc,demo_topic,"('127.0.0.1', 52134)",3145728,0,success,0.004302
+2de78ef4f49141e8a5552cb6195fe2f9,topic_fault,"('127.0.0.1', 52563)",16777216,0,success,0.015056
+547cd0ad8b6741d5bb02146622acfbf8,topic_fault,"('127.0.0.1', 52565)",16777216,0,success,0.007924
+2b95bdbb7ae4466089b376a08225b25b,topic_fault,"('127.0.0.1', 52567)",1769472,1,injected_failure,0.001327
+c395acde22ba485ea5b614d78f4fa06b,topic_fault,"('127.0.0.1', 52568)",16777216,0,success,0.013045
+ab023d90b09e4826926ac8633751b87b,topic_fault,"('127.0.0.1', 52570)",13369344,1,injected_failure,0.006689
+853ce7d8240841b18573372916295909,topic_fault,"('127.0.0.1', 52571)",5308416,1,injected_failure,0.005702
+c1f19e638a004cc9bdb0b341323ce2bb,topic_fault,"('127.0.0.1', 52572)",16777216,0,success,0.013332
+b1ecc61618f844b29a7ab0a6c25c27a7,topic_fault,"('127.0.0.1', 52574)",393216,1,injected_failure,0.000591
+2f4a681ae4c44d1abbb3b9d0c8e07b23,topic_fault,"('127.0.0.1', 52575)",16777216,0,success,0.01309
