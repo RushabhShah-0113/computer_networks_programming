@@ -50,7 +50,7 @@ class BlockingParallelClient:
         self.server_ip = server_ip
         self.server_port = server_port
         self.topic = topic
-        self.output_dir = Path(output_dir).resolve()
+        self.output_dir = Path(output_dir).resolve() / topic
         self.parallel_connections = parallel_connections
         self.metrics_csv = metrics_csv
 

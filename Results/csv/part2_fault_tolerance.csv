@@ -1,0 +1,11 @@
+implementation,failure_probability,trial,completion_time,useful_bytes,total_bytes_transmitted,redundant_bytes,reconnections,throughput_mbps
+restart_from_beginning,0.0,1,0.074,16777216,16777216,0,0,1814.58
+restart_from_beginning,0.1,1,0.0618,16777216,16777216,0,0,2171.25
+restart_from_beginning,0.2,1,0.5816,16777216,25165824,8388608,1,230.78
+restart_from_beginning,0.3,1,1.0993,16777216,33554432,16777216,2,122.1
+restart_from_beginning,0.4,1,0.5798,16777216,25165824,8388608,1,231.5
+checkpoint_and_resume,0.0,1,0.0713,16777216,16777216,0,0,1883.3
+checkpoint_and_resume,0.1,1,0.0678,16777216,16777216,0,0,1978.6
+checkpoint_and_resume,0.2,1,0.0694,16777216,16777216,0,0,1934.93
+checkpoint_and_resume,0.3,1,0.0702,16777216,16777216,0,0,1911.98
+checkpoint_and_resume,0.4,1,0.0677,16777216,16777216,0,0,1982.57

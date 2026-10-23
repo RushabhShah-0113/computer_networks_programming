@@ -151,6 +151,7 @@ def handle_connection(
     root,
     failure_probability,
     log_path,
+    checkpoint_interval=CHECKPOINT_INTERVAL,
 ):
     started = time.perf_counter()
     topic = ""
@@ -335,7 +336,7 @@ def handle_connection(
                     transmitted_payload_bytes += len(data)
 
                     should_checkpoint = (
-                        unconfirmed_bytes >= CHECKPOINT_INTERVAL
+                        unconfirmed_bytes >= checkpoint_interval
                         or sent_offset == file_size
                     )
 
@@ -475,6 +476,12 @@ def main():
         default="server_metrics.csv",
         help="CSV path for per-connection server metrics",
     )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=CHECKPOINT_INTERVAL,
+        help="Byte interval between checkpoints",
+    )
     args = parser.parse_args()
 
     if not 0.0 <= args.failure_probability <= 1.0:
@@ -492,6 +499,7 @@ def main():
         print(f"Server listening on port {args.port}")
         print(f"Topics directory: {root}")
         print(f"Failure probability: {args.failure_probability}")
+        print(f"Checkpoint interval: {args.checkpoint_interval} bytes")
         print(f"Server metrics CSV: {args.log}")
 
         while True:
@@ -504,6 +512,7 @@ def main():
                 root,
                 args.failure_probability,
                 args.log,
+                checkpoint_interval=args.checkpoint_interval,
             )
 
 

@@ -336,7 +336,6 @@ class NonBlockingClient:
 
     def after_output_sent(self, worker, action):
         if action["type"] == "checkpoint_ack":
-            worker["awaiting_checkpoint"] = True
             worker["pending_checkpoint_offset"] = action["offset"]
 
             # Persist only after the ACK has been fully sent.
@@ -402,7 +401,18 @@ class NonBlockingClient:
             if response.get("topic") != self.topic:
                 raise ProtocolError("TRANSFER_COMPLETE topic mismatch")
 
+            if (
+                worker["file_handle"] is not None
+                and worker["current_offset"] == worker["file_size"]
+            ):
+                self.finish_received_file(worker)
+
             self.finish_worker(worker)
+
+            # Mark all idle workers without active files as finished
+            for other_worker in self.connections.values():
+                if other_worker.get("file_handle") is None:
+                    other_worker["finished"] = True
 
         elif message_type == ERROR:
             response = decode_json(payload)
@@ -454,19 +464,17 @@ class NonBlockingClient:
             raise ProtocolError("Invalid FILE_INFO")
 
         if worker["file_handle"] is not None:
-            raise ProtocolError("Received FILE_INFO while a file is active")
+            if worker["current_offset"] == worker["file_size"]:
+                self.finish_received_file(worker)
+            else:
+                raise ProtocolError("Received FILE_INFO while a file is active")
 
         destination = self.output_dir / filename
         part_path = self.output_dir / f"{filename}.part"
 
         if destination.exists() and destination.stat().st_size == size:
-            # The final file already exists. The server may be recovering
-            # after a client restart; do not silently treat it as complete
-            # without consuming the server's transfer protocol.
-            raise ProtocolError(
-                f"Destination already exists for {filename}; "
-                "use a clean output directory for a new run"
-            )
+            worker["completed_files"].add(filename)
+            return
 
         handle = open(part_path, "r+b" if part_path.exists() else "w+b")
 
@@ -738,11 +746,8 @@ class NonBlockingClient:
                 for worker in self.connections.values():
                     if (
                         worker["file_handle"] is not None
-                        and worker["awaiting_checkpoint"]
-                        and worker["pending_checkpoint_offset"]
-                        == worker["file_size"]
-                        and worker["confirmed_offset"]
-                        == worker["file_size"]
+                        and worker["current_offset"] == worker["file_size"]
+                        and not worker["output_buffer"]
                     ):
                         self.finish_received_file(worker)
 

@@ -18,6 +18,7 @@ class TransferMetrics:
         self.useful_bytes = 0
         self.failure_count = 0
         self.reconnect_count = 0
+        self._received_payload_bytes = 0
 
         self._rates = deque(maxlen=10)
         self._sample_start = None
@@ -37,10 +38,12 @@ class TransferMetrics:
             self.total_bytes_transmitted += count
 
     def add_received_bytes(self, count):
-        """Use received payload rate for ETA; this is not server byte accounting."""
+        """Use received payload rate for ETA and track received bytes."""
         now = time.perf_counter()
 
         with self._lock:
+            self._received_payload_bytes += count
+            self.total_bytes_transmitted += count
             self._sample_bytes += count
 
             if self._sample_start is None:

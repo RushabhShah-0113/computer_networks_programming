@@ -1,0 +1,16 @@
+implementation,parallel_connections,trial,completion_time,throughput_mbps,redundant_bytes
+blocking_parallel,1,1,0.0801,1676.17,83886
+blocking_parallel,2,1,0.3314,405.05,83886
+blocking_parallel,4,1,0.3874,346.45,83886
+blocking_parallel,8,1,0.1315,1020.92,83886
+nonblocking_parallel,1,1,0.1796,747.3,83886
+nonblocking_parallel,2,1,0.0711,1888.27,83886
+nonblocking_parallel,4,1,0.0702,1911.25,83886
+blocking_parallel,1,1,0.8636,155.41,83886
+blocking_parallel,2,1,0.1238,1084.43,83886
+blocking_parallel,4,1,0.3312,405.29,83886
+blocking_parallel,8,1,0.131,1024.38,83886
+nonblocking_parallel,1,1,0.1914,701.26,83886
+nonblocking_parallel,2,1,0.0725,1851.82,83886
+nonblocking_parallel,4,1,0.0724,1854.31,83886
+nonblocking_parallel,8,1,0.0734,1827.73,83886
